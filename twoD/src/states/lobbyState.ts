@@ -1,5 +1,6 @@
 import { GameState, GameDI } from "./GameState";
 import { canvas } from "../main";
+import { io, Socket } from "socket.io-client";
 
 interface LobbyStateI extends GameState {
   enter(gameDI?: GameDI): void;
@@ -26,10 +27,15 @@ export default class LobbyState implements LobbyStateI {
   private messages: string[] = [];
   private gameDI: GameDI | null = null;
   private clickHandler: ((e: MouseEvent) => void) | null = null;
+  private socket: Socket | null = null;
+  private currentRoomId: string | null = null;
 
   enter(gameDI: GameDI): void {
     console.log("Entering Lobby State");
     this.gameDI = gameDI;
+
+    // Connect to Socket.io server
+    this.connectToServer();
 
     // Create buttons
     this.initializeButtons();
@@ -53,7 +59,60 @@ export default class LobbyState implements LobbyStateI {
       this.clickHandler = null;
     }
 
+    // Disconnect socket
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
+
     this.stopLoop();
+  }
+
+  connectToServer(): void {
+    // Connect to the Socket.io server
+    try {
+      this.socket = io("http://localhost:3000");
+
+      // Set up socket event listeners
+      this.socket.on("connect", () => {
+        this.addMessage("Connected to server!");
+      });
+
+      this.socket.on("disconnect", () => {
+        this.addMessage("Disconnected from server");
+      });
+
+      this.socket.on("room:created", (data) => {
+        this.currentRoomId = data.roomId;
+        this.addMessage(`Room created! Room ID: ${data.roomId}`);
+      });
+
+      this.socket.on("room:joined", (data) => {
+        this.currentRoomId = data.roomId;
+        this.addMessage(`Joined room: ${data.roomId}`);
+      });
+
+      this.socket.on("room:error", (data) => {
+        this.addMessage(`Error: ${data.message}`);
+      });
+
+      this.socket.on("player:joined", () => {
+        this.addMessage("Another player has joined your room!");
+      });
+
+      this.socket.on("game:start", () => {
+        this.addMessage("Game starting...");
+        // Wait a moment before starting the game to let players see the message
+        setTimeout(() => {
+          if (this.gameDI) {
+            this.gameDI.changeState(this.gameDI.playState);
+          }
+        }, 2000);
+      });
+    } catch (error) {
+      console.error("Failed to connect to server:", error);
+      this.addMessage("Failed to connect to server");
+    }
   }
 
   initializeButtons(): void {
@@ -78,7 +137,7 @@ export default class LobbyState implements LobbyStateI {
         width: btnWidth,
         height: btnHeight,
         text: "Join Room",
-        onClick: () => this.joinRoom(),
+        onClick: () => this.promptJoinRoom(),
       },
       {
         x: btnX,
@@ -112,17 +171,30 @@ export default class LobbyState implements LobbyStateI {
   }
 
   createRoom(): void {
-    const roomId = Math.floor(100000 + Math.random() * 900000); // 6-digit room ID
-    this.addMessage(`Room created! Room ID: ${roomId}`);
+    if (this.socket) {
+      this.socket.emit("create:room");
+      this.addMessage("Creating room...");
+    } else {
+      this.addMessage("Error: Not connected to server");
+    }
   }
 
-  joinRoom(): void {
-    // In a real implementation, this would prompt for a room ID
-    this.addMessage("Enter Room ID to join...");
-    // Simulating a join after a timeout
-    setTimeout(() => {
-      this.addMessage("Joined room successfully!");
-    }, 1500);
+  promptJoinRoom(): void {
+    // In a real implementation, this would be a proper input dialog
+    // For now, we'll use the browser's prompt
+    const roomId = prompt("Enter Room ID to join:");
+    if (roomId) {
+      this.joinRoom(roomId);
+    }
+  }
+
+  joinRoom(roomId: string): void {
+    if (this.socket) {
+      this.socket.emit("join:room", { roomId });
+      this.addMessage(`Attempting to join room ${roomId}...`);
+    } else {
+      this.addMessage("Error: Not connected to server");
+    }
   }
 
   goBackToMenu(): void {
@@ -137,6 +209,7 @@ export default class LobbyState implements LobbyStateI {
     if (this.messages.length > 5) {
       this.messages.shift();
     }
+    console.log(message);
   }
 
   update(dt: number): void {
@@ -153,6 +226,22 @@ export default class LobbyState implements LobbyStateI {
     ctx.font = "48px 'Lexend Mega'";
     ctx.textAlign = "center";
     ctx.fillText("Lobby", ctx.canvas.width / 2, 100);
+
+    // Connection status
+    ctx.fillStyle = this.socket?.connected ? "#00ff00" : "#ff0000";
+    ctx.font = "16px 'Lexend Mega'";
+    ctx.fillText(
+      this.socket?.connected ? "Connected to Server" : "Not Connected",
+      ctx.canvas.width / 2,
+      140
+    );
+
+    // Current room info
+    if (this.currentRoomId) {
+      ctx.fillStyle = "white";
+      ctx.font = "20px 'Lexend Mega'";
+      ctx.fillText(`Room ID: ${this.currentRoomId}`, ctx.canvas.width / 2, 170);
+    }
 
     // Draw buttons
     this.buttons.forEach((button) => {
